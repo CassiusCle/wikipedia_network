@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "wikipedia_network"
+version = "0.0.1"
+description = "A project for scrawling Wikipedia articles, creating a network from them, and analyzing the network."
+keywords = ["wikipedia", "network", "graph", "analysis"]
+authors = ["CassiusCle"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/CassiusCle/wikipedia_network"
+packages = [
+    {include = "data_collection", from = "src"}
+]
+
+[tool.poetry.dependencies]
+python = ">=3.11"
+numpy = ">=1.23.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
