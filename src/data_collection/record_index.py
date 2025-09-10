@@ -1,3 +1,9 @@
+"""Record index management for Wikipedia network data collection.
+
+This module provides the RecordIndex class for tracking visited and failed articles
+to prevent duplicate processing and maintain state between batch runs.
+"""
+
 import logging
 import os
 import shutil
@@ -6,6 +12,12 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RecordIndex:
+    """Track visited and failed articles to prevent duplicate processing.
+
+    This class maintains records in text files between batches and provides
+    methods for adding new records and managing state persistence.
+    """
+
     batch_folder: str
     previous_batch_folder: str | None
     logger: logging.Logger
@@ -17,6 +29,7 @@ class RecordIndex:
     is_batch_finished: bool = field(default=False, init=False)
 
     def __post_init__(self):
+        """Initialize the record index by setting up files and loading existing records."""
         self.record_index_file = os.path.join(self.batch_folder, self.file_name)
         if self.previous_batch_folder is not None:
             self._initialise_from_previous_batch()
@@ -51,14 +64,14 @@ class RecordIndex:
 
     # Methods for modifying the record index
     def add_record(self, record_to_add: str, write_to_file: bool = False) -> None:
+        """Add a single record to the index."""
         self.records.add(record_to_add)
         if write_to_file:
             self._save_specified_records_to_file({record_to_add})
         return None
 
-    def add_multiple_records(
-        self, records_to_add: set[str], write_to_file: bool = False
-    ) -> None:
+    def add_multiple_records(self, records_to_add: set[str], write_to_file: bool = False) -> None:
+        """Add multiple records to the index."""
         self.records.update(records_to_add)
         if write_to_file:
             self._save_specified_records_to_file(records_to_add)
@@ -72,7 +85,6 @@ class RecordIndex:
         self.logger.info("Visited articles saved to file")
         return None
 
-
     def _save_all_records_to_file(self) -> None:
         if not self.is_batch_finished:
             self.logger.warning(
@@ -80,14 +92,10 @@ class RecordIndex:
             )
 
         self.number_of_files += 1
-        back_up_file_name = (
-            self.file_name.split(".", maxsplit=1)[0] + f"_{self.number_of_files}.txt"
-        )
+        back_up_file_name = self.file_name.split(".", maxsplit=1)[0] + f"_{self.number_of_files}.txt"
         back_up_record_index_file = os.path.join(self.batch_folder, back_up_file_name)
         shutil.move(self.record_index_file, back_up_record_index_file)
-        self.logger.debug(
-            "Previous record index file backed up as '%s'", back_up_file_name
-        )
+        self.logger.debug("Previous record index file backed up as '%s'", back_up_file_name)
 
         with open(self.record_index_file, "w", encoding="utf-8") as new_file:
             for r in self.records:
@@ -96,6 +104,7 @@ class RecordIndex:
         return None
 
     def finish_batch(self) -> None:
+        """Mark the batch as finished and save all records to file."""
         self.is_batch_finished = True
         self._save_all_records_to_file()
         return None
