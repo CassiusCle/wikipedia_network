@@ -11,8 +11,9 @@ from data_collection.record_index import RecordIndex
 from data_collection.batch_metadata import BatchMetadata
 
 def _setup_logger() -> logging.Logger:
+    """Sets up a logger for the BatchFileManager class."""
     logger = logging.getLogger(__name__)
-    if not logger.handlers:  # Check if handlers already exist
+    if not logger.handlers:  # Avoid adding handlers multiple times
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -22,60 +23,62 @@ def _setup_logger() -> logging.Logger:
         logger.setLevel(logging.INFO)
     return logger
 
+
 @dataclass
 class BatchFileManager:
+    """
+    Manages batch operations including folder structure, metadata, and article processing.
 
-    data_folder: str | None
-    previous_batch_folder: str | None
+    Attributes:
+        data_folder (str | None): The path to the data folder.
+        previous_batch_folder (str | None): Path to the folder containing the previous batch.
+        logger (logging.Logger): Logger instance for logging messages.
+    """
+
+    data_folder: str | None = None
+    previous_batch_folder: str | None = None
     logger: logging.Logger = field(default_factory=_setup_logger)
 
     batch_number: int = field(init=False)
     batch_folder: str = field(init=False)
+    staging_folder: str = field(init=False)
+    visited_articles: RecordIndex = field(init=False)
+    failed_articles: RecordIndex = field(init=False)
+    active_chunk: BatchChunk = field(init=False)
     chunks: list[BatchChunk] = field(init=False)
     time_start: datetime | None = field(init=False)
     time_end: datetime | None = field(init=False)
-    visited_articles: RecordIndex = field(init=False)
-    failed_articles: RecordIndex = field(init=False)
     batch_metadata: BatchMetadata = field(init=False)
-    
-
-
-    # Instance attributes
-    # data_folder: str
-    # batch_folder: str
-    # previous_batch_folder: str | None
-    # batch_number: int
-    # number_of_results_files: int
-    # path_active_file: str
-    # number_of_lines_active_file: int
-    # chunks: list[BatchChunk]
-    # batch_metadata_file: str
-    # time_start: datetime
 
     def __post_init__(self):
-        self.logger.info("BatchFileManager is initialising the current batch")
+        """Initializes the BatchFileManager by setting up the batch number, folders, and metadata."""
+        self.logger.info("BatchFileManager is initializing the current batch")
 
-        # Set-up batch
+        # Set-up batch based on the previous batch folder or data folder
         if self.previous_batch_folder is not None:
             self.batch_number, self.data_folder = self._set_up_from_previous_batch_folder(
                 self.previous_batch_folder
             )
         else:
             self.logger.info("No previous batch folder provided.")
-            self.batch_number, self.data_folder, self.previous_batch_folder = (
-                self.set_up_from_data_path_or_nothing(self.data_folder)
+            self.batch_number, self.previous_batch_folder = (
+                self._set_up_from_data_folder_or_nothing(self.data_folder)
             )
-
         self.batch_folder = self._create_new_batch_folder()
 
-        # Set-up visited articles index and failed articles index
+        # Create the "staging" subfolder if it doesn't exist
+        self.staging_folder = os.path.join(self.data_folder, "staging")
+        if not os.path.exists(self.staging_folder):
+            os.makedirs(self.staging_folder)
+
+        # Set up visited and failed articles indexes
         self.visited_articles = RecordIndex(
             batch_folder=self.batch_folder,
             previous_batch_folder=self.previous_batch_folder,
             file_name="visited_articles.txt",
             logger=self.logger
         )
-        
+
         self.failed_articles = RecordIndex(
             batch_folder=self.batch_folder,
             previous_batch_folder=self.previous_batch_folder,
@@ -83,7 +86,7 @@ class BatchFileManager:
             logger=self.logger
         ) # These are the articles that failed to be scraped
 
-        # Set-up data storage mechanism
+        # Set up active chunk for batch storage
         self.active_chunk = BatchChunk(
             batch_number=self.batch_number,
             chunk_number=1,
@@ -92,7 +95,7 @@ class BatchFileManager:
         )
         self.chunks = [self.active_chunk]
 
-        # Initialise metadata file
+        # Initialize metadata file
         self.batch_metadata = BatchMetadata() #self.create_metadata_file() # TODO: Replace with Metadata class
 
         self.logger.info(
@@ -102,14 +105,16 @@ class BatchFileManager:
         )
         return None
 
-    # def __init__(
-    #     self,
-    #     previous_batch_folder: str | None = None,
-    #     data_path: str | None = None,
-    #     logger: logging.Logger | None = None,
-    # ) -> None:
-
     def _set_up_from_previous_batch_folder(self, previous_batch_folder: str) -> tuple[int, str]:
+        """
+        Sets up the batch number and data folder based on the previous batch folder.
+
+        Args:
+            previous_batch_folder (str): The path of the previous batch folder.
+
+        Returns:
+            tuple[int, str]: The batch number and the path to the data folder.
+        """
         self.logger.info("Previous batch folder provided: %s", previous_batch_folder)
         match_previous_batch_number = re.search(
             r"_batch_(\d+)$", previous_batch_folder.split("/")[-1]
@@ -130,57 +135,35 @@ class BatchFileManager:
 
         return batch_number, data_folder
 
-    def set_up_from_data_path_or_nothing(
-        self, data_path: str | None
-    ) -> tuple[int, str, str | None]:
-        
-        if data_path is None:
-            data_path = self._find_or_create_data_folder()
-        self.data_folder = data_path if data_path.endswith("/data") else f"{data_path}/data"
+    def _set_up_from_data_folder_or_nothing(
+        self, data_folder: str | None
+    ) -> tuple[int, str | None]:
+        """
+        Sets up the batch number and the previous batch folder, or creates a new data folder.
+
+        Args:
+            data_folder (str | None): The path of the data folder.
+
+        Returns:
+            tuple[int, str | None]: The batch number and the previous batch folder.
+        """
+
+        if data_folder is None:
+            self.data_folder = self._find_or_create_data_folder()
         self.logger.info("Data folder path set to: '%s'", self.data_folder)
         previous_batch_folder, previous_batch_number = self._get_recent_batch_history()
         batch_number = previous_batch_number + 1 if previous_batch_number else 1
         self.logger.info("Current batch number set to: %s", batch_number)
 
-        return batch_number, self.data_folder, previous_batch_folder    
-
-    def start_batch_run(self):
-        self.logger.info("Starting batch run")
-        self.time_start = datetime.now()
-
-    # def _create_or_get_visited_articles_file(self) -> str:
-    #     target_file = os.path.join(self.batch_folder, "visited_articles.txt")
-
-    #     if self.previous_batch_folder:
-    #         source_file = os.path.join(
-    #             self.previous_batch_folder, "visited_articles.txt"
-    #         )
-    #         if os.path.exists(source_file):
-    #             shutil.copy(source_file, target_file)
-    #             self.logger.info(
-    #                 "Found visited articles file for previous batch and copied to current batch folder"
-    #             )
-    #         else:
-    #             open(target_file, "w", encoding="utf-8").close()
-    #             self.logger.info(
-    #                 "No visited articles file found for previous batch, thus created a blank file in current batch folder"
-    #             )
-    #     else:
-    #         open(target_file, "w", encoding="utf-8").close()
-    #         self.logger.info(
-    #             "No previous batch available. Created a blank visited articles file in current batch folder"
-    #         )
-
-    #     return target_file
-
-    def create_metadata_file(self) -> str:
-        metadata_file_path = os.path.join(self.batch_folder, "metadata.jsonl")
-        open(metadata_file_path, "w", encoding="utf-8").close()
-        self.logger.info(f"Metadata file created at: '{metadata_file_path}'")
-        return metadata_file_path
+        return batch_number, previous_batch_folder
 
     def _find_or_create_data_folder(self) -> str:
-        """Add docstring"""
+        """
+        Finds or creates a data folder in the project root.
+
+        Returns:
+            str: The path to the data folder.
+        """
         root_path = BatchFileManager._find_project_root()
         for dirpath, dirnames, _ in os.walk(root_path):
             if "data" in dirnames:
@@ -188,7 +171,7 @@ class BatchFileManager:
                 self.logger.info(f"Data folder found at: '{data_folder}'")
                 return data_folder
 
-        # If no data folder is found, create one
+        # Create the data folder if not found
         data_folder = os.path.join(root_path, "data")
         os.makedirs(data_folder)
         self.logger.info(f"No data folder found, created one at: '{data_folder}'")
@@ -196,36 +179,31 @@ class BatchFileManager:
         return data_folder
 
     def _get_recent_batch_history(self) -> tuple[str | None, int | None]:
-        """Add docstring"""
+        """
+        Retrieves the most recent batch folder and its batch number.
 
-        # Find or create the "staging" subfolder in the "data" folder
-        staging_folder = os.path.join(self.data_folder, "staging")
-        if not os.path.exists(staging_folder):
-            os.makedirs(staging_folder)
-
-        # Get the list of subfolders in the "staging" folder
-        subfolders = [f.name for f in os.scandir(staging_folder) if f.is_dir()]
-
-        # Find the batch folders with names like "YYYYMMDD_batch_{batch number}"
+        Returns:
+            tuple[str | None, int | None]: The path to the previous batch folder and its batch number.
+        """
+        subfolders = [f.name for f in os.scandir(self.staging_folder) if f.is_dir()]
         pattern = re.compile(r"^\d{8}_batch_\d+$")
         batch_folders = [f for f in subfolders if pattern.match(f)]
 
-        # Determine the number of the next batch and the path of the previous batch
         if batch_folders:
             previous_batch_number = max(
                 [int(f.split("_batch_")[1]) for f in batch_folders]
             )
-
             previous_batch_folder_name = [
                 f
                 for f in batch_folders
                 if int(f.split("_batch_")[1]) == previous_batch_number
             ][0]
             previous_batch_folder = os.path.join(
-                staging_folder, previous_batch_folder_name
+                self.staging_folder, previous_batch_folder_name
             )
             self.logger.info(
-                f"Previous batch folder found at: '{previous_batch_folder}'"
+                "Previous batch folder found at: '%s'",
+                previous_batch_folder
             )
         else:
             previous_batch_folder = None
@@ -233,15 +211,33 @@ class BatchFileManager:
 
         return previous_batch_folder, previous_batch_number
 
-    def _create_new_batch_folder(self) -> str:
-        """Add docstring"""
-        staging_folder = os.path.join(self.data_folder, "staging")
+    # Methods for managing the batch
+    def start_batch_run(self):
+        """Starts the batch run and logs the starting time."""
+        self.logger.info("Starting batch run")
+        self.time_start = datetime.now()
 
-        # Create the new batch folder
+
+    def create_metadata_file(self):
+        """Placeholder for metadata file creation logic."""
+        # TODO: Move to class, this was autogenerated
+        # metadata_file_path = os.path.join(self.batch_folder, "metadata.jsonl")
+        # open(metadata_file_path, "w", encoding="utf-8").close()
+        # self.logger.info(f"Metadata file created at: '{metadata_file_path}'")
+        # return metadata_file_path
+        pass
+
+    def _create_new_batch_folder(self) -> str:
+        """
+        Creates a new batch folder based on the current date and batch number.
+
+        Returns:
+            str: The path to the new batch folder.
+        """
         new_batch_folder_name = (
             f"{datetime.now().strftime('%Y%m%d')}_batch_{self.batch_number}"
         )
-        new_batch_folder = os.path.join(staging_folder, new_batch_folder_name)
+        new_batch_folder = os.path.join(self.staging_folder, new_batch_folder_name)
         os.makedirs(new_batch_folder)
         self.logger.info(f"New batch folder created at: '{new_batch_folder}'")
 
@@ -249,6 +245,15 @@ class BatchFileManager:
 
     @staticmethod
     def _find_project_root(max_levels=4):
+        """
+        Finds the project root directory by searching for common root files.
+
+        Args:
+            max_levels (int): The maximum number of directory levels to search.
+
+        Returns:
+            str | None: The path to the project
+        """
         root_files = [
             "LICENSE",
             "README.md",
